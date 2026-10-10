@@ -204,39 +204,76 @@ jupyter notebook notebooks/01_hr_attrition_end_to_end.ipynb
 ### Luồng thực thi bên trong Notebook
 
 ```python
-# 1. Import các module chuẩn từ app
-from app.data import load_raw_data, validate_source_data
-from app.features import build_features_matrix
-from app.train import run_model_comparison
-from app.evaluate import evaluate_imbalance_metrics, plot_confusion_matrix_risk_band
-from app.explain import extract_top_drivers, generate_llm_explanation
-from app.inference import predict_single_employee
+# 0. Import các module chuẩn từ app
+from app.config import settings
+from app.data import (sync_data_from_s3, validate_source_data, preprocess_data, feature_engineering, feature_selection, exploratory_data_analysis)
+from app.train import split_data, handle_imbalance_data, train_and_track_models
+from app.evaluate import evaluate_classifier, evaluate_risk_bands
+from app.features import FINAL_FEATURES, TARGET_COLUMN
+from app.inference import get_inference_services
+from app.explain import generate_llm_explanation
+from app.schemas import AttritionInput, ExplainInput
 
-# 2. Ingest & Kiểm tra chất lượng dữ liệu
-raw_frames = load_raw_data()
-validation_report = validate_source_data(raw_frames)
-display(validation_report)
+# 1. Ingest & Kiểm tra chất lượng dữ liệu
+ingestion_report = sync_data_from_s3()
+validation_report = validate_source_data()
+display(pd.DataFrame([ingestion_report, validation_report]))
 
-# 3. Feature Engineering & Kiểm tra rò rỉ dữ liệu (Anti-Leakage)
+merged_df = pd.read_parquet(settings.MERGED_DATA_PATH)
+display(merged_df.head())
+print(f'Merged dataset shape: {merged_df.shape}')
+
+# 2. EDA, Preprocessing & Feature Engineering
 # Chỉ aggregate dữ liệu <= snapshot_date
-df_features = build_features_matrix(raw_frames)
-print(f"Features shape: {df_features.shape}")
+eda_report = exploratory_data_analysis()
+preprocessing_report = preprocess_data()
+engineering_report = feature_engineering()
+selection_report = feature_selection()
+display(pd.DataFrame([eda_report, preprocessing_report, engineering_report, selection_report]))
 
-# 4. Train & Đánh giá đa mô hình (MLflow tracking)
-results, best_model = run_model_comparison(df_features)
-display(results)
+feature_df = pd.read_parquet(settings.FEATURE_SELECTED_PATH)
+display(feature_df.head())
+print(f'Selected feature dataset shape: {feature_df.shape}')
 
-# 5. Đánh giá chuyên sâu Imbalance Data
-# Tính ROC-AUC, PR-AUC, F1 và Confusion Matrix theo Risk Band (LOW, MEDIUM, HIGH, CRITICAL)
-metrics = evaluate_imbalance_metrics(best_model, test_data)
-plot_confusion_matrix_risk_band(metrics["risk_band_confusion_matrix"])
+# 3. Train & Đánh giá đa mô hình (MLflow tracking)
+split_report = split_data()
+balance_report = handle_imbalance_data()
+display(pd.DataFrame([split_report, balance_report]))
 
-# 6. Explainability & LLM Reasoning có Guardrails
-sample = test_data.iloc[0]
-risk_score, risk_band = best_model.predict_proba(sample)
-top_drivers = extract_top_drivers(best_model, sample, top_k=3)
-explanation = generate_llm_explanation(risk_score, risk_band, top_drivers)
-print(explanation)
+train_df = pd.read_parquet(settings.TRAIN_BALANCED_PATH)
+test_df = pd.read_parquet(settings.TEST_BALANCED_PATH)
+training_summary = train_and_track_models(train_df, test_df)
+metrics_df = pd.DataFrame(training_summary['full_metrics']).sort_values('roc_auc', ascending=False)
+display(metrics_df)
+print(f"Best model: {training_summary['best_model']['Model']}")
+
+# 4. Đánh giá best model
+pipeline = joblib.load(settings.BEST_MODEL_PATH)
+X_test, y_test = test_df[FINAL_FEATURES], test_df[TARGET_COLUMN]
+y_proba = pipeline.predict_proba(X_test)[:, 1]
+y_pred = pipeline.predict(X_test)
+metrics = evaluate_classifier(y_test, y_pred, y_proba)
+risk_band_report = evaluate_risk_bands(y_test, y_proba)
+display(pd.DataFrame([metrics]))
+display(pd.DataFrame(risk_band_report['bands_summary']).T)
+
+# 5. Explainability & LLM Reasoning có Guardrails
+sample_row = test_df.dropna(subset=FINAL_FEATURES).iloc[0]
+sample_payload = sample_row[FINAL_FEATURES].to_dict()
+attrition_input = AttritionInput(**sample_payload)
+prediction = get_inference_services().predict_one(attrition_input)
+display(pd.DataFrame([prediction.model_dump(exclude={'top_drivers'})]))
+display(pd.DataFrame([driver.model_dump() for driver in prediction.top_drivers]))
+
+explain_input = ExplainInput(
+    churn_probability=prediction.churn_probability,
+    risk_band=prediction.risk_band,
+    top_drivers=[driver.model_dump() for driver in prediction.top_drivers],
+    department=sample_payload['department'],
+    role=sample_payload['role'],
+)
+explanation = generate_llm_explanation(explain_input)
+display(explanation)
 ```
 
 ---
