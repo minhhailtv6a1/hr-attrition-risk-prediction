@@ -1,0 +1,49 @@
+# Python & Environments
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+myenv/
+.venv/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Data & Models (ignore large files, keep samples)
+data/raw/*.csv
+data/processed/*.parquet
+data/processed/*.csv
+data/merged/*.parquet
+artifacts/
+models/*.joblib
+models/*.json
+models/production/*.json
+!models/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Reports & Logs
+reports/eda_charts/*.png
+reports/evaluations/*.png
+*.log
+
+# MLflow
+mlruns/
+.mlflow/
+mlflow.db
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.pem
+
+# IDEs
+.vscode/
+.idea/
+*.swp

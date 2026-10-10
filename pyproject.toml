@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hr-attrition-risk-prediction-v1"
+version = "1.0.0"
+description = "Employee Churn Rate Prediction with Machine Learning, MLOps, and LLM Reasoning"
+authors = [{ name = "Data Science Team" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "fastapi>=0.110.0",
+    "pydantic>=2.6.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

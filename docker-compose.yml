@@ -1,0 +1,52 @@
+services:
+    postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >-
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri postgresql+psycopg2://airflow:airflow@postgres:5432/mlflow
+      --default-artifact-root /mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    ports:
+      - "5001:5000"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      MODELS_DIR: /app/models
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/mlflow
+    volumes:
+      - ./models:/app/models
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - mlflow
+
+volumes:
+  postgres-data:
+  mlflow-artifacts:
