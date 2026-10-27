@@ -449,6 +449,10 @@ def train_and_track_models(
         settings.SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
         settings.SCHEMA_PATH.write_text(json.dumps(schema, indent=2), encoding="utf-8")
 
+        # Lưu full metrics cho từng mô hình
+        settings.FULL_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        settings.FULL_METRICS_PATH.write_text(json.dumps(summary["full_metrics"], indent=2), encoding="utf-8")
+
         # Lưu Production Manifest
         manifest = {
             "model_name": best_name,
@@ -463,15 +467,79 @@ def train_and_track_models(
 
         return summary
 
+
+def train_model_with_mlflow() -> Dict[str, Any]:
+    """Train all candidate models from the balanced Airflow stage outputs."""
+    missing_paths = [
+        path
+        for path in (settings.TRAIN_BALANCED_PATH, settings.TEST_BALANCED_PATH)
+        if not path.exists()
+    ]
+    if missing_paths:
+        missing = ", ".join(str(path) for path in missing_paths)
+        raise FileNotFoundError(
+            f"Balanced datasets are missing: {missing}. "
+            "Run split_data and handle_class_imbalance first."
+        )
+
+    train_df = pd.read_parquet(settings.TRAIN_BALANCED_PATH)
+    test_df = pd.read_parquet(settings.TEST_BALANCED_PATH)
+    return train_and_track_models(train_df, test_df)
+
+
+def publish_if_quality_passes() -> Dict[str, Any]:
+    """Enforce the release quality gate after the training stage completes."""
+    required_artifacts = (
+        settings.BEST_MODEL_PATH,
+        settings.METRICS_PATH,
+        settings.SCHEMA_PATH,
+        settings.MODEL_MANIFEST_PATH,
+    )
+    missing_artifacts = [path for path in required_artifacts if not path.exists()]
+    if missing_artifacts:
+        missing = ", ".join(str(path) for path in missing_artifacts)
+        raise FileNotFoundError(f"Training artifacts are missing: {missing}")
+
+    manifest = json.loads(settings.MODEL_MANIFEST_PATH.read_text(encoding="utf-8"))
+    roc_auc = float(manifest.get("roc_auc", 0.0))
+    threshold = float(settings.MIN_ROC_AUC)
+    quality_passed = roc_auc >= threshold
+
+    manifest.update(
+        {
+            "quality_gate": threshold,
+            "quality_passed": quality_passed,
+            "publication_status": "published" if quality_passed else "rejected",
+            "quality_checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    settings.MODEL_MANIFEST_PATH.write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
+
+    if not quality_passed:
+        raise RuntimeError(
+            f"Model rejected by quality gate: ROC-AUC {roc_auc:.4f} "
+            f"is below {threshold:.4f}."
+        )
+
+    return {
+        "status": "published",
+        "model_name": manifest.get("model_name"),
+        "model_path": str(settings.BEST_MODEL_PATH),
+        "manifest_path": str(settings.MODEL_MANIFEST_PATH),
+        "roc_auc": roc_auc,
+        "quality_gate": threshold,
+    }
+
 def training_pipeline() -> Dict[str, Any]:
     """Huấn luyện mô hình và lưu trữ kết quả."""
     _ = split_data()
     _ = handle_imbalance_data()
 
-    train_df = pd.read_parquet(settings.TRAIN_BALANCED_PATH)
-    test_df = pd.read_parquet(settings.TEST_BALANCED_PATH)
-
-    training_summary = train_and_track_models(train_df, test_df)
+    training_summary = train_model_with_mlflow()
+    publication = publish_if_quality_passes()
 
     return {
         "run_id": training_summary["run_id"],
@@ -482,4 +550,5 @@ def training_pipeline() -> Dict[str, Any]:
         "recall": training_summary["best_model"].get("recall"),
         "f1": training_summary["best_model"].get("f1"),
         "roc_auc": training_summary["best_model"].get("roc_auc"),
+        "publication_status": publication["status"],
     }

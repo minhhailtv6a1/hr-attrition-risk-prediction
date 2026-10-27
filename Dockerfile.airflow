@@ -1,0 +1,23 @@
+FROM apache/airflow:3.3.2-python3.11
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+COPY --chown=airflow:root requirements.txt /opt/airflow/requirements.txt
+RUN pip install --no-cache-dir \
+    "apache-airflow==${AIRFLOW_VERSION}" \
+    -r /opt/airflow/requirements.txt
+
+WORKDIR /opt/airflow/project
+COPY --chown=airflow:root app/ ./app/
+COPY --chown=airflow:root helper/ ./helper/
+COPY --chown=airflow:root scripts/ ./scripts/
+COPY --chown=airflow:root dags/ /opt/airflow/dags/
+
+ENV PYTHONPATH=/opt/airflow/project
+
+CMD ["airflow", "scheduler"]

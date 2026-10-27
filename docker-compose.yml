@@ -1,5 +1,56 @@
+x-airflow-common: &airflow-common
+  image: hr-attrition-airflow:3.3.2
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "1"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-development-jwt-secret-change-me-please-use-at-least-64-characters}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    PYTHONPATH: /opt/airflow/project
+    PROJECT_ROOT: /opt/airflow/project
+    DATA_SOURCE: ${DATA_SOURCE:-local}
+    ARTIFACTS_DIR: /opt/airflow/project/artifacts
+    RAW_DATA_DIR: /opt/airflow/project/data/raw
+    MERGED_DATA_DIR: /opt/airflow/project/data/merged
+    PROCESSED_DATA_DIR: /opt/airflow/project/data/processed
+    MODELS_DIR: /opt/airflow/project/models
+    REPORTS_DIR: /opt/airflow/project/reports
+    S3_BUCKET: ${S3_BUCKET:-}
+    S3_PREFIX: ${S3_PREFIX:-data/}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-southeast-1}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-hr-attrition-risk-prediction-v1}
+    MIN_ROC_AUC: ${MIN_ROC_AUC:-0.70}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./app:/opt/airflow/project/app
+    - ./helper:/opt/airflow/project/helper
+    - ./scripts:/opt/airflow/project/scripts
+    - ./data:/opt/airflow/project/data
+    - ./artifacts:/opt/airflow/project/artifacts
+    - ./models:/opt/airflow/project/models
+    - ./reports:/opt/airflow/project/reports
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    mlflow:
+      condition: service_started
+
 services:
-    postgres:
+  postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: airflow
@@ -15,14 +66,29 @@ services:
     ports:
       - "5433:5432"
 
+  airflow-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+
   mlflow:
     build:
       context: .
       dockerfile: Dockerfile
     command: >-
       mlflow server --host 0.0.0.0 --port 5000
+      --allowed-hosts mlflow:5000,mlflow,localhost:5001,localhost,127.0.0.1:5001,127.0.0.1
       --backend-store-uri postgresql+psycopg2://airflow:airflow@postgres:5432/mlflow
-      --default-artifact-root /mlflow/artifacts
+      --artifacts-destination /mlflow/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,6 +105,9 @@ services:
       MODELS_DIR: /app/models
       MLFLOW_TRACKING_URI: http://mlflow:5000
       DATABASE_URL: postgresql+psycopg2://airflow:airflow@postgres:5432/mlflow
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
     volumes:
       - ./models:/app/models
     ports:
@@ -47,6 +116,70 @@ services:
       - postgres
       - mlflow
 
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - airflow db migrate
+    restart: "no"
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test:
+        ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-cli:
+    <<: *airflow-common
+    profiles: ["debug"]
+    entrypoint: /bin/bash
+    command: -c "airflow version"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:
   mlflow-artifacts:
+  airflow-postgres-data:
+  airflow-logs:

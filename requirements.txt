@@ -23,3 +23,5 @@ langchain-core>=0.2.0
 langchain-openai>=0.1.0
 langchain-anthropic>=0.1.0
 langchain-groq>=0.1.0
+apache-airflow==3.3.2
+apache-airflow-providers-standard>=1.10.0

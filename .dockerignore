@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.pytest_cache
+__pycache__/
+*.py[cod]
+myenv/
+mlruns/
+mlflow.db
+notebooks/
+artifacts/
+data/raw/*.csv
+data/merged/*.parquet
+data/processed/*.parquet
+models/*.joblib
+reports/eda_charts/*.png
+reports/evaluations/*.png

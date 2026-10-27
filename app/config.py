@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     TRAIN_BALANCED_PATH: Path = _project_path(os.getenv("TRAIN_BALANCED_PATH", "data/processed/train_balanced.parquet"))
     TEST_BALANCED_PATH: Path = _project_path(os.getenv("TEST_BALANCED_PATH", "data/processed/test_balanced.parquet"))
     BEST_MODEL_PATH: Path = _project_path(os.getenv("BEST_MODEL_PATH", "models/best_model.joblib"))
+    FULL_METRICS_PATH: Path = _project_path(os.getenv("FULL_METRICS_PATH", "artifacts/full_metrics.json"))
     METRICS_PATH: Path = _project_path(os.getenv("METRICS_PATH", "models/metrics.json"))
     SCHEMA_PATH: Path = _project_path(os.getenv("SCHEMA_PATH", "models/schema.json"))
     MODEL_MANIFEST_PATH: Path = _project_path(os.getenv("MODEL_MANIFEST_PATH", "models/production/model_manifest.json"))
